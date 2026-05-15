@@ -15,7 +15,7 @@ function WeatherDashboard() {
   const [userId, setUserId] = useState(null);
   const [activeTab, setActiveTab] = useState('search');
 
-  const API_URL = 'http://localhost:5000';
+  const API_URL = 'https://weather-dashboard-hassananwar3737.vercel.app/api';
   const OPENWEATHER_API_KEY = '54082987e583e4f7a94c6509c5549d03';
 
   // Initialize userId from localStorage
