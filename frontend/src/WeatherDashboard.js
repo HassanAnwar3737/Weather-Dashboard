@@ -176,19 +176,6 @@ function WeatherDashboard() {
     );
   };
 
-  // Fetch Forecast
-  const fetchForecast = async (cityName) => {
-    try {
-      const response = await axios.get(`${API_URL}/api/forecast`, {
-        params: { city: cityName },
-      });
-      setForecast(response.data.forecast);
-    } catch (err) {
-      console.error('Error fetching forecast:', err);
-      setForecast([]);
-    }
-  };
-
   // Handle Search
   const handleSearch = () => {
     if (city.trim()) {
