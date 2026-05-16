@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import axios from 'axios';
 import HourlyForecast from './components/HourlyForecast';
 import './WeatherDashboard.css';
@@ -15,8 +15,7 @@ function WeatherDashboard() {
   const [userId, setUserId] = useState(null);
   const [activeTab, setActiveTab] = useState('search');
 
-  const API_URL = 'https://weather-dashboard-hassananwar3737.vercel.app/api';
-  const OPENWEATHER_API_KEY = '54082987e583e4f7a94c6509c5549d03';
+  const API_URL = process.env.REACT_APP_API_URL || '';
 
   // Initialize userId from localStorage
   useEffect(() => {
@@ -24,62 +23,56 @@ function WeatherDashboard() {
     if (!storedUserId) {
       storedUserId = 'user-' + Math.random().toString(36).substr(2, 9);
       localStorage.setItem('userId', storedUserId);
-      console.log('📍 Created new userId:', storedUserId);
-    } else {
-      console.log('📍 Using existing userId:', storedUserId);
     }
     setUserId(storedUserId);
   }, []);
 
   // Fetch History
-  const fetchHistory = async (id) => {
+  const fetchHistory = useCallback(async (uid) => {
     try {
       const response = await axios.get(`${API_URL}/api/history`, {
-        params: { userId: id },
+        params: { userId: uid },
       });
       setHistory(response.data);
     } catch (err) {
       console.error('Error fetching history:', err);
     }
-  };
+  }, [API_URL]);
 
   // Fetch Favorites
-  const fetchFavorites = async (id) => {
+  const fetchFavorites = useCallback(async (uid) => {
     try {
-      console.log('🔄 Fetching favorites for userId:', id);
       const response = await axios.get(`${API_URL}/api/favorites`, {
-        params: { userId: id },
+        params: { userId: uid },
       });
-      console.log('✅ Got favorites:', response.data);
       setFavorites(response.data);
     } catch (err) {
       console.error('Error fetching favorites:', err);
     }
-  };
+  }, [API_URL]);
 
   // Load favorites & history when userId is set
   useEffect(() => {
     if (userId) {
-      console.log('📍 UserId ready, loading data...');
       fetchFavorites(userId);
       fetchHistory(userId);
     }
-  }, [userId]);
+  }, [userId, fetchFavorites, fetchHistory]);
 
-  // Fetch Full Hourly Data
+  // Fetch Full Forecast via backend
   const fetchFullForecast = async (cityName) => {
     try {
-      const response = await axios.get(
-        `https://api.openweathermap.org/data/2.5/forecast?q=${cityName}&appid=${OPENWEATHER_API_KEY}&units=metric`
-      );
-      return response.data.list; // Return full hourly list
+      const response = await axios.get(`${API_URL}/api/forecast/full`, {
+        params: { city: cityName }
+      });
+      return response.data;
     } catch (err) {
-      console.error('Error fetching full forecast:', err);
+      console.error('Error fetching forecast:', err);
       return [];
     }
   };
 
-  // Fetch Weather
+  // Fetch Weather by City
   const fetchWeather = async (cityName) => {
     setLoading(true);
     setError('');
@@ -88,11 +81,8 @@ function WeatherDashboard() {
         params: { city: cityName, userId },
       });
       setWeather(response.data);
-      
-      // Get full hourly forecast
       const hourlyData = await fetchFullForecast(cityName);
-      setForecast(hourlyData); // Store full list for hourly component
-      
+      setForecast(hourlyData);
       fetchHistory(userId);
     } catch (err) {
       setError('❌ City not found. Please try again.');
@@ -102,35 +92,16 @@ function WeatherDashboard() {
     setLoading(false);
   };
 
-  // Fetch Weather by Coordinates (for My Location)
+  // Fetch Weather by Coordinates via backend
   const fetchWeatherByCoords = async (lat, lon) => {
     setLocationLoading(true);
     setError('');
     try {
-      const response = await axios.get(
-        `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${OPENWEATHER_API_KEY}&units=metric`
-      );
-
-      const weatherData = {
-        city: response.data.name,
-        country: response.data.sys.country,
-        temperature: Math.round(response.data.main.temp),
-        condition: response.data.weather[0].main,
-        description: response.data.weather[0].description,
-        humidity: response.data.main.humidity,
-        windSpeed: Math.round(response.data.wind.speed * 3.6),
-        feelsLike: Math.round(response.data.main.feels_like),
-      };
-
-      console.log(`✅ Got weather for ${weatherData.city}`);
-      setWeather(weatherData);
-      
-      // Fetch forecast for this location
-      const forecastResponse = await axios.get(
-        `https://api.openweathermap.org/data/2.5/forecast?lat=${lat}&lon=${lon}&appid=${OPENWEATHER_API_KEY}&units=metric`
-      );
-
-      setForecast(forecastResponse.data.list);
+      const response = await axios.get(`${API_URL}/api/weather/coords`, {
+        params: { lat, lon, userId }
+      });
+      setWeather(response.data.weather);
+      setForecast(response.data.forecast);
       fetchHistory(userId);
     } catch (err) {
       setError('❌ Could not fetch weather for your location.');
@@ -145,42 +116,35 @@ function WeatherDashboard() {
       setError('❌ Geolocation not supported by your browser.');
       return;
     }
-
     setLocationLoading(true);
     setError('');
-
     navigator.geolocation.getCurrentPosition(
       (position) => {
         const { latitude, longitude } = position.coords;
-        console.log(`📍 Got location: ${latitude}, ${longitude}`);
         fetchWeatherByCoords(latitude, longitude);
       },
-      (error) => {
+      (err) => {
         setLocationLoading(false);
-        if (error.code === error.PERMISSION_DENIED) {
+        if (err.code === err.PERMISSION_DENIED) {
           setError('❌ Permission denied. Please enable location access.');
-        } else if (error.code === error.POSITION_UNAVAILABLE) {
+        } else if (err.code === err.POSITION_UNAVAILABLE) {
           setError('❌ Location information is unavailable.');
-        } else if (error.code === error.TIMEOUT) {
+        } else if (err.code === err.TIMEOUT) {
           setError('❌ Location request timed out.');
         } else {
           setError('❌ Error getting your location.');
         }
-        console.error('Geolocation error:', error);
       },
-      {
-        enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 0,
-      }
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
     );
   };
 
   // Handle Search
   const handleSearch = () => {
     if (city.trim()) {
-      fetchWeather(city);
+      const searchCity = city;
       setCity('');
+      fetchWeather(searchCity);
     }
   };
 
@@ -218,7 +182,7 @@ function WeatherDashboard() {
 
   // Get Background Class
   const getBackgroundClass = () => {
-    if (!weather) return 'bg-initial';
+    if (!weather || !weather.condition) return 'bg-initial';
     const condition = weather.condition.toLowerCase();
     if (condition.includes('sunny') || condition.includes('clear')) return 'bg-sunny';
     if (condition.includes('rain')) return 'bg-rainy';
@@ -240,7 +204,6 @@ function WeatherDashboard() {
     return '🌤️';
   };
 
-  // Wait for userId to be loaded
   if (!userId) {
     return <div className="dashboard bg-initial"><div className="overlay"></div></div>;
   }
@@ -256,7 +219,6 @@ function WeatherDashboard() {
       <div className="overlay"></div>
 
       <div className="container">
-        {/* Initial Welcome Screen */}
         {!weather && (
           <div className="welcome-section">
             <div className="welcome-content">
@@ -277,17 +239,15 @@ function WeatherDashboard() {
               placeholder="Search for a city..."
               value={city}
               onChange={(e) => setCity(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
+              onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
               className="search-input"
             />
             <button onClick={handleSearch} disabled={loading} className="search-btn">
               {loading ? '⏳' : '🔍'}
             </button>
           </div>
-
-          {/* My Location Button */}
-          <button 
-            onClick={handleMyLocation} 
+          <button
+            onClick={handleMyLocation}
             disabled={locationLoading}
             className="location-btn"
           >
@@ -310,18 +270,14 @@ function WeatherDashboard() {
               <div className="weather-header">
                 <div className="city-info">
                   <h2>{weather.city}, {weather.country}</h2>
-                  <p className="date-time">
-                    Today ({getDayName(0)})
-                  </p>
+                  <p className="date-time">Today ({getDayName(0)})</p>
                 </div>
-                <button className="favorite-btn" onClick={addToFavorites}>
-                  ❤️
-                </button>
+                <button className="favorite-btn" onClick={addToFavorites}>❤️</button>
               </div>
 
               <div className="weather-main">
                 <div className="temperature-section">
-                  <div className={`weather-icon ${weather.condition.toLowerCase().includes('clear') ? 'icon-clear' : weather.condition.toLowerCase().includes('sunny') ? 'icon-sunny' : ''}`}>
+                  <div className={`weather-icon ${weather.condition && weather.condition.toLowerCase().includes('clear') ? 'icon-clear' : weather.condition && weather.condition.toLowerCase().includes('sunny') ? 'icon-sunny' : ''}`}>
                     {getWeatherIcon(weather.condition)}
                   </div>
                   <div className="temperature-info">
@@ -330,7 +286,6 @@ function WeatherDashboard() {
                     <div className="description">{weather.description}</div>
                   </div>
                 </div>
-
                 <div className="feels-like-box">
                   <span className="label">Feels like</span>
                   <span className="value">{weather.feelsLike}°C</span>
@@ -355,12 +310,8 @@ function WeatherDashboard() {
               </div>
             </div>
 
-            {/* Hourly Forecast */}
-            {forecast.length > 0 && (
-              <HourlyForecast list={forecast} />
-            )}
+            {forecast.length > 0 && <HourlyForecast list={forecast} />}
 
-            {/* 5-Day Forecast */}
             {forecast.length > 0 && (
               <div className="forecast-section">
                 <h3 className="forecast-title">📅 5-Day Forecast</h3>
@@ -382,30 +333,15 @@ function WeatherDashboard() {
           </>
         )}
 
-        {/* Tabs - NOW ALWAYS VISIBLE */}
+        {/* Tabs */}
         <div className="tabs">
-          <button
-            className={`tab ${activeTab === 'search' ? 'active' : ''}`}
-            onClick={() => setActiveTab('search')}
-          >
+          <button className={`tab ${activeTab === 'search' ? 'active' : ''}`} onClick={() => setActiveTab('search')}>
             🔍 Search
           </button>
-          <button
-            className={`tab ${activeTab === 'history' ? 'active' : ''}`}
-            onClick={() => {
-              setActiveTab('history');
-              fetchHistory(userId);
-            }}
-          >
+          <button className={`tab ${activeTab === 'history' ? 'active' : ''}`} onClick={() => { setActiveTab('history'); fetchHistory(userId); }}>
             📜 History ({history.length}/10)
           </button>
-          <button
-            className={`tab ${activeTab === 'favorites' ? 'active' : ''}`}
-            onClick={() => {
-              setActiveTab('favorites');
-              fetchFavorites(userId);
-            }}
-          >
+          <button className={`tab ${activeTab === 'favorites' ? 'active' : ''}`} onClick={() => { setActiveTab('favorites'); fetchFavorites(userId); }}>
             ❤️ Favorites ({favorites.length})
           </button>
         </div>
@@ -425,12 +361,7 @@ function WeatherDashboard() {
                       <p>{item.temperature}°C • {item.condition}</p>
                       <small>{new Date(item.timestamp).toLocaleString()}</small>
                     </div>
-                    <button
-                      onClick={() => fetchWeather(item.city)}
-                      className="btn-small"
-                    >
-                      View
-                    </button>
+                    <button onClick={() => fetchWeather(item.city)} className="btn-small">View</button>
                   </div>
                 ))}
               </div>
@@ -453,18 +384,8 @@ function WeatherDashboard() {
                       <small>Added {new Date(fav.addedAt).toLocaleDateString()}</small>
                     </div>
                     <div className="button-group">
-                      <button
-                        onClick={() => fetchWeather(fav.city)}
-                        className="btn-small btn-view"
-                      >
-                        View
-                      </button>
-                      <button
-                        onClick={() => removeFromFavorites(fav._id)}
-                        className="btn-small btn-delete"
-                      >
-                        Delete
-                      </button>
+                      <button onClick={() => fetchWeather(fav.city)} className="btn-small btn-view">View</button>
+                      <button onClick={() => removeFromFavorites(fav._id)} className="btn-small btn-delete">Delete</button>
                     </div>
                   </div>
                 ))}

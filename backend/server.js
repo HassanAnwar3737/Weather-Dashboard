@@ -8,12 +8,7 @@ const app = express();
 
 // Middleware
 const corsOptions = {
-  origin: [
-    'https://weather-dashboard-eight-jade.vercel.app',
-    'https://weather-dashboard-hassananwar3737.vercel.app',
-    'http://localhost:3000',
-    'http://localhost:5173'
-  ],
+  origin: process.env.FRONTEND_URL || '*',
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type']
@@ -23,7 +18,8 @@ app.use(cors(corsOptions));
 app.use(express.json());
 
 // MongoDB Connection
-mongoose.connect('mongodb://localhost:27017/weather-app')
+const mongoURI = process.env.MONGODB_URI;
+mongoose.connect(mongoURI)
   .then(() => console.log('✅ MongoDB Connected!'))
   .catch(err => console.log('❌ MongoDB Error:', err));
 
@@ -56,7 +52,7 @@ const Favorite = mongoose.model('Favorite', favoriteSchema);
 // API KEY
 // =====================
 
-const API_KEY = '54082987e583e4f7a94c6509c5549d03';
+const API_KEY = process.env.OPENWEATHER_API_KEY;
 
 // =====================
 // API ENDPOINTS
@@ -67,7 +63,7 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'Backend is running!' });
 });
 
-// Get Weather
+// Get Weather by City
 app.get('/api/weather', async (req, res) => {
   try {
     const city = req.query.city;
@@ -90,20 +86,15 @@ app.get('/api/weather', async (req, res) => {
       condition: response.data.weather[0].main,
       description: response.data.weather[0].description,
       humidity: response.data.main.humidity,
-      windSpeed: Math.round(response.data.wind.speed * 3.6), // Convert m/s to km/h
+      windSpeed: Math.round(response.data.wind.speed * 3.6),
       feelsLike: Math.round(response.data.main.feels_like),
     };
 
-    console.log(`✅ Got weather for ${city}: ${weatherData.temperature}°C - ${weatherData.condition}`);
-
     // Save to MongoDB (Max 10 records per user)
     const searchCount = await WeatherSearch.countDocuments({ userId });
-    
     if (searchCount >= 10) {
       const oldest = await WeatherSearch.findOne({ userId }).sort({ timestamp: 1 });
-      if (oldest) {
-        await WeatherSearch.deleteOne({ _id: oldest._id });
-      }
+      if (oldest) await WeatherSearch.deleteOne({ _id: oldest._id });
     }
 
     const search = new WeatherSearch({
@@ -117,51 +108,74 @@ app.get('/api/weather', async (req, res) => {
     });
 
     await search.save();
-
     res.json(weatherData);
   } catch (err) {
     console.error('❌ Error:', err.response?.data || err.message);
-    res.status(err.response?.status || 500).json({ 
+    res.status(err.response?.status || 500).json({
       error: err.response?.data?.message || 'City not found or API error'
     });
   }
 });
 
-// Get Forecast (5-Day)
-app.get('/api/forecast', async (req, res) => {
+// Get Weather by Coordinates
+app.get('/api/weather/coords', async (req, res) => {
   try {
-    const city = req.query.city;
+    const { lat, lon, userId = 'anonymous' } = req.query;
 
-    if (!city) {
-      return res.status(400).json({ error: 'City name required' });
+    const response = await axios.get(
+      `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${API_KEY}&units=metric`
+    );
+
+    const forecastResponse = await axios.get(
+      `https://api.openweathermap.org/data/2.5/forecast?lat=${lat}&lon=${lon}&appid=${API_KEY}&units=metric`
+    );
+
+    const weatherData = {
+      city: response.data.name,
+      country: response.data.sys.country,
+      temperature: Math.round(response.data.main.temp),
+      condition: response.data.weather[0].main,
+      description: response.data.weather[0].description,
+      humidity: response.data.main.humidity,
+      windSpeed: Math.round(response.data.wind.speed * 3.6),
+      feelsLike: Math.round(response.data.main.feels_like),
+    };
+
+    // Save to MongoDB
+    const searchCount = await WeatherSearch.countDocuments({ userId });
+    if (searchCount >= 10) {
+      const oldest = await WeatherSearch.findOne({ userId }).sort({ timestamp: 1 });
+      if (oldest) await WeatherSearch.deleteOne({ _id: oldest._id });
     }
 
-    console.log(`🔍 Fetching forecast for: ${city}`);
+    await new WeatherSearch({
+      userId,
+      city: weatherData.city,
+      temperature: weatherData.temperature,
+      condition: weatherData.condition,
+      humidity: weatherData.humidity,
+      windSpeed: weatherData.windSpeed,
+      feelsLike: weatherData.feelsLike,
+    }).save();
 
+    res.json({ weather: weatherData, forecast: forecastResponse.data.list });
+  } catch (err) {
+    console.error('❌ Error:', err.response?.data || err.message);
+    res.status(500).json({ error: 'Could not fetch weather by location' });
+  }
+});
+
+// Get Full Forecast by City
+app.get('/api/forecast/full', async (req, res) => {
+  try {
+    const { city } = req.query;
     const response = await axios.get(
       `https://api.openweathermap.org/data/2.5/forecast?q=${city}&appid=${API_KEY}&units=metric`
     );
-
-    // Get forecast for next 4 days (one per day at noon/middle of day)
-    const forecastData = response.data.list
-      .filter((item, index) => index % 8 === 0) // Every 8 items = 24 hours apart
-      .slice(0, 4)
-      .map(item => ({
-        temperature: Math.round(item.main.temp),
-        condition: item.weather[0].main,
-        description: item.weather[0].description,
-        humidity: item.main.humidity,
-        windSpeed: Math.round(item.wind.speed * 3.6), // Convert m/s to km/h
-      }));
-
-    console.log(`✅ Got forecast for ${city}:`, forecastData.map(d => `${d.temperature}°C ${d.condition}`).join(' | '));
-
-    res.json({ forecast: forecastData });
+    res.json(response.data.list);
   } catch (err) {
     console.error('❌ Error:', err.response?.data || err.message);
-    res.status(err.response?.status || 500).json({ 
-      error: err.response?.data?.message || 'Error fetching forecast'
-    });
+    res.status(500).json({ error: 'Error fetching forecast' });
   }
 });
 
@@ -182,12 +196,8 @@ app.get('/api/history', async (req, res) => {
 app.post('/api/favorites', async (req, res) => {
   try {
     const { userId, city } = req.body;
-
     const exists = await Favorite.findOne({ userId, city });
-    if (exists) {
-      return res.status(400).json({ error: 'Already in favorites' });
-    }
-
+    if (exists) return res.status(400).json({ error: 'Already in favorites' });
     const favorite = new Favorite({ userId, city });
     await favorite.save();
     res.json(favorite);
@@ -218,10 +228,9 @@ app.delete('/api/favorites/:id', async (req, res) => {
 });
 
 // Start Server
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-  console.log(`✅ Server running on http://localhost:5000`);
-  console.log(`🔑 API Key Active: ${API_KEY}`);
-  console.log(`📍 Using REAL OpenWeatherMap API`);
-  console.log(`✅ MongoDB Connected!`);
+  console.log(`✅ Server running on port ${PORT}`);
+  console.log(`✅ MongoDB URI loaded: ${mongoURI ? 'Yes' : 'No'}`);
+  console.log(`✅ API Key loaded: ${API_KEY ? 'Yes' : 'No'}`);
 });
